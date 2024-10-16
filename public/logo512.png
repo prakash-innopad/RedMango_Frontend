@@ -1,0 +1,70 @@
+ng(value)\n    : Array.isArray(value) ?\n      value.map((v: string | number | boolean) => toEnvVal(v)).join(delim)\n    : /* c8 ignore start */ undefined\n  if (typeof str !== 'string') {\n    throw new Error(\n      `could not serialize value to environment: ${JSON.stringify(value)}`,\n    )\n  }\n  /* c8 ignore stop */\n  return str\n}\n\nconst fromEnvVal = <T extends ConfigType, M extends boolean>(\n  env: string,\n  type: T,\n  multiple: M,\n  delim: string = '\\n',\n): ValidValue<T, M> =>\n  (multiple ?\n    env ? env.split(delim).map(v => fromEnvVal(v, type, false))\n    : []\n  : type === 'string' ? env\n  : type === 'boolean' ? env === '1'\n  : +env.trim()) as ValidValue<T, M>\n\n/**\n * Defines the type of value that is valid, given a config definition's\n * {@link ConfigType} and boolean multiple setting\n */\nexport type ValidValue<\n  T extends ConfigType = ConfigType,\n  M extends boolean = boolean,\n> =\n  [T, M] extends ['number', true] ? number[]\n  : [T, M] extends ['string', true] ? string[]\n  : [T, M] extends ['boolean', true] ? boolean[]\n  : [T, M] extends ['number', false] ? number\n  : [T, M] extends ['string', false] ? string\n  : [T, M] extends ['boolean', false] ? boolean\n  : [T, M] extends ['string', boolean] ? string | string[]\n  : [T, M] extends ['boolean', boolean] ? boolean | boolean[]\n  : [T, M] extends ['number', boolean] ? number | number[]\n  : [T, M] extends [ConfigType, false] ? string | number | boolean\n  : [T, M] extends [ConfigType, true] ? string[] | number[] | boolean[]\n  : string | number | boolean | string[] | number[] | boolean[]\n\n/**\n * The meta information for a config option definition, when the\n * type and multiple values can be inferred by the method being used\n */\nexport type ConfigOptionMeta<\n  T extends ConfigType,\n  M extends boolean = boolean,\n  O extends\n    | undefined\n    | (T extends 'boolean' ? never\n      : T extends 'string' ? readonly string[]\n      : T extends 'number' ? readonly number[]\n      : readonly number[] | readonly string[]) =\n    | undefined\n    | (T extends 'boolean' ? never\n      : T extends 'string' ? readonly string[]\n      : T extends 'number' ? readonly number[]\n      : readonly number[] | readonly string[]),\n> = {\n  default?:\n    | undefined\n    | (ValidValue<T, M> &\n        (O extends number[] | string[] ?\n          M extends false ?\n            O[number]\n          : O[number][]\n        : unknown))\n  validOptions?: O\n  description?: string\n  validate?:\n    | ((v: unknown) => v is ValidValue<T, M>)\n    | ((v: unknown) => boolean)\n  short?: string | undefined\n  type?: T\n  hint?: T extends 'boolean' ? never : string\n  delim?: M extends true ? string : never\n} & (M extends false ? { multiple?: false | undefined }\n: M extends true ? { multiple: true }\n: { multiple?: boolean })\n\n/**\n * A set of {@link ConfigOptionMeta} fields, referenced by their longOption\n * string values.\n */\nexport type ConfigMetaSet<\n  T extends ConfigType,\n  M extends boolean = boolean,\n> = {\n  [longOption: string]: ConfigOptionMeta<T, M>\n}\n\n/**\n * Infer {@link ConfigSet} fields from a given {@link ConfigMetaSet}\n */\nexport type ConfigSetFromMetaSet<\n  T extends ConfigType,\n  M extends boolean,\n  S extends ConfigMetaSet<T, M>,\n> = {\n  [longOption in keyof S]: ConfigOptionBase<T, M>\n}\n\n/**\n * Fields that can be set on a {@link ConfigOptionBase} or\n * {@link ConfigOptionMeta} based on whether or not the field is known to be\n * multiple.\n */\nexport type MultiType<M extends boolean> =\n  M extends true ?\n    {\n      multiple: true\n      delim?: string | undefined\n    }\n  : M extends false ?\n    {\n      multiple?: false | undefined\n      delim?: undefined\n    }\n  : {\n      multiple?: boolean | undefined\n      delim?: string | undefined\n    }\n\n/**\n * A config field definition, in its full representation.\n */\nexport type ConfigOptionBase<\n  T extends ConfigType,\n  M extends boolean = boolean,\n> = {\n  type: T\n  short?: string | undefined\n  default?: ValidValue<T, M> | undefined\n  description?: string\n  hint?: T extends 'boolean' ? undefined : string | undefined\n  validate?: (v: unknown) => v is ValidValue<T, M>\n  validOptions?: T extends 'boolean' ? undefined\n  : T extends 'string' ? readonly string[]\n  : T extends 'number' ? readonly number[]\n  : readonly number[] | readonly string[]\n} & MultiType<M>\n\nexport const isConfigType = (t: string): t is ConfigType =>\n  typeof t === 'string' &&\n  (t === 'string' || t === 'number' || t === 'boolean')\n\nconst undefOrType = (v: unknown, t: string): boolean =>\n  v === undefined || typeof v === t\nconst undefOrTypeArray = (v: unknown, t: string): boolean =>\n  v === undefined || (Array.isArray(v) && v.every(x => typeof x === t))\n\nconst isValidOption = (v: unknown, vo: readonly unknown[]): boolean =>\n  Array.isArray(v) ? v.every(x => isValidOption(x, vo)) : vo.includes(v)\n\n// print the value type, for error message reporting\nconst valueType = (\n  v:\n    | string\n    | number\n    | boolean\n    | string[]\n    | number[]\n    | boolean[]\n    | { type: ConfigType; multiple?: boolean },\n): string =>\n  typeof v === 'string' ? 'string'\n  : typeof v === 'boolean' ? 'boolean'\n  : typeof v === 'number' ? 'number'\n  : Array.isArray(v) ?\n    joinTypes([...new Set(v.map(v => valueType(v)))]) + '[]'\n  : `${v.type}${v.multiple ? '[]' : ''}`\n\nconst joinTypes = (types: string[]): string =>\n  types.length === 1 && typeof types[0] === 'string' ?\n    types[0]\n  : `(${types.join('|')})`\n\nconst isValidValue = <T extends ConfigType, M extends boolean>(\n  v: unknown,\n  type: T,\n  multi: M,\n): v is ValidValue<T, M> => {\n  if (multi) {\n    if (!Array.isArray(v)) return false\n    return !v.some((v: unknown) => !isValidValue(v, type, false))\n  }\n  if (Array.isArray(v)) return false\n  return typeof v === type\n}\n\nexport const isConfigOption = <T extends ConfigType, M extends boolean>(\n  o: any,\n  type: T,\n  multi: M,\n): o is ConfigOptionBase<T, M> =>\n  !!o &&\n  typeof o === 'object' &&\n  isConfigType(o.type) &&\n  o.type === type &&\n  undefOrType(o.short, 'string') &&\n  undefOrType(o.description, 'string') &&\n  undefOrType(o.hint, 'string') &&\n  undefOrType(o.validate, 'function') &&\n  (o.type === 'boolean' ?\n    o.validOptions === undefined\n  : undefOrTypeArray(o.validOptions, o.type)) &&\n  (o.default === undefined || isValidValue(o.default, type, multi)) &&\n  !!o.multiple === multi\n\n/**\n * A set of {@link ConfigOptionBase} objects, referenced by their longOption\n * string values.\n */\nexport type ConfigSet = {\n  [longOption: string]: ConfigOptionBase<ConfigType>\n}\n\n/**\n * The 'values' field returned by {@link Jack#parse}\n */\nexport type OptionsResults<T extends ConfigSet> = {\n  [k in keyof T]?: T[k]['validOptions'] extends (\n    readonly string[] | readonly number[]\n  ) ?\n    T[k] extends ConfigOptionBase<'string' | 'number', false> ?\n      T[k]['validOptions'][number]\n    : T[k] extends ConfigOptionBase<'string' | 'number', true> ?\n      T[k]['validOptions'][number][]\n    : never\n  : T[k] extends ConfigOptionBase<'string', false> ? string\n  : T[k] extends ConfigOptionBase<'string', true> ? string[]\n  : T[k] extends ConfigOptionBase<'number', false> ? number\n  : T[k] extends ConfigOptionBase<'number', true> ? number[]\n  : T[k] extends ConfigOptionBase<'boolean', false> ? boolean\n  : T[k] extends ConfigOptionBase<'boolean', true> ? boolean[]\n  : never\n}\n\n/**\n * The object retured by {@link Jack#parse}\n */\nexport type Parsed<T extends ConfigSet> = {\n  values: OptionsResults<T>\n  positionals: string[]\n}\n\nfunction num(\n  o: ConfigOptionMeta<'number', false> = {},\n): ConfigOptionBase<'number', false> {\n  const { default: def, validate: val, validOptions, ...rest } = o\n  if (def !== undefined && !isValidValue(def, 'number', false)) {\n    throw new TypeError('invalid default value', {\n      cause: {\n        found: def,\n        wanted: 'number',\n      },\n    })\n  }\n  if (!undefOrTypeArray(validOptions, 'number')) {\n    throw new TypeError('invalid validOptions', {\n      cause:'use strict';
+
+const { Duplex } = require('stream');
+
+/**
+ * Emits the `'close'` event on a stream.
+ *
+ * @param {Duplex} stream The stream.
+ * @private
+ */
+function emitClose(stream) {
+  stream.emit('close');
+}
+
+/**
+ * The listener of the `'end'` event.
+ *
+ * @private
+ */
+function duplexOnEnd() {
+  if (!this.destroyed && this._writableState.finished) {
+    this.destroy();
+  }
+}
+
+/**
+ * The listener of the `'error'` event.
+ *
+ * @param {Error} err The error
+ * @private
+ */
+function duplexOnError(err) {
+  this.removeListener('error', duplexOnError);
+  this.destroy();
+  if (this.listenerCount('error') === 0) {
+    // Do not suppress the throwing behavior.
+    this.emit('error', err);
+  }
+}
+
+/**
+ * Wraps a `WebSocket` in a duplex stream.
+ *
+ * @param {WebSocket} ws The `WebSocket` to wrap
+ * @param {Object} [options] The options for the `Duplex` constructor
+ * @return {Duplex} The duplex stream
+ * @public
+ */
+function createWebSocketStream(ws, options) {
+  let terminateOnDestroy = true;
+
+  const duplex = new Duplex({
+    ...options,
+    autoDestroy: false,
+    emitClose: false,
+    objectMode: false,
+    writableObjectMode: false
+  });
+
+  ws.on('message', function message(msg, isBinary) {
+    const data =
+      !isBinary && duplex._readableState.objectMode ? msg.toString() : msg;
+
+    if (!duplex.push(data)) ws.pause();
+  });
+
+  ws.once('error', function error(err) {
+    if (duplex.destroyed) return;
+
+    // Prevent `ws.terminate()` from being called 
